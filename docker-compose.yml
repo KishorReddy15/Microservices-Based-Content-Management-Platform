@@ -1,0 +1,156 @@
+version: '3.8'
+
+services:
+  # Content Service
+  content-service:
+    build: ./content-service
+    ports:
+      - "8005:8005"
+    environment:
+      - MONGO_URI=mongodb://mongodb:27017/
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8005/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # API Gateway
+  api-gateway:
+    build: ./api-gateway
+    ports:
+      - "8000:8000"
+    environment:
+      - ASSIGNMENT_SERVICE_URL=http://assignment-service:8001
+      - GRADING_SERVICE_URL=http://grading-service:8002
+      - QUIZ_SERVICE_URL=http://quiz-service:8003
+      - FORUM_SERVICE_URL=http://forum-service:8004
+      - CONTENT_SERVICE_URL=http://content-service:8005
+    depends_on:
+      assignment-service:
+        condition: service_started
+      grading-service:
+        condition: service_started
+      quiz-service:
+        condition: service_started
+      forum-service:
+        condition: service_started
+      content-service:
+        condition: service_started
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # Assignment Service
+  assignment-service:
+    build: ./assignment-service
+    ports:
+      - "8001:8001"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/content_management
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8001/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # Grading Service
+  grading-service:
+    build: ./grading-service
+    ports:
+      - "8002:8002"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/content_management
+      - MONGO_URI=mongodb://mongodb:27017/
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      assignment-service:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8002/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  # Quiz Service
+  quiz-service:
+    build: ./quiz-service
+    ports:
+      - "8003:8003"
+    environment:
+      - MONGO_URI=mongodb://mongodb:27017/
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8003/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # Forum Service
+  forum-service:
+    build: ./forum-service
+    ports:
+      - "8004:8004"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/content_management
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8004/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # Databases
+  postgres:
+    image: postgres:14
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=content_management
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  mongodb:
+    image: mongo:4.4
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    healthcheck:
+      test: [ "CMD", "mongo", "--eval", "db.adminCommand('ping')" ]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  postgres_data:
+  mongodb_data:

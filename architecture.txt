@@ -1,0 +1,59 @@
+# Content Management Platform Architecture
+
+## Core Frameworks & Languages
+- Python 3.9+
+- FastAPI (0.109.2 for most services, 0.68.1 for Forum Service)
+- Uvicorn (ASGI server)
+
+## Databases
+- PostgreSQL 14 (Assignment, Forum, Grading services)
+- MongoDB 4.4 (Content, Quiz, Grading services)
+
+## Database Connectivity
+- SQLAlchemy 1.4.23 (PostgreSQL ORM)
+- PyMongo 3.12.0 (MongoDB driver)
+- psycopg2 2.9.5 (PostgreSQL adapter)
+
+## Data Validation & Serialization
+- Pydantic (1.8.2 - 2.6.1, varies by service)
+
+## Authentication & Security
+- python-jose 3.3.0 (JWT token handling)
+- passlib 1.7.4 (Password hashing)
+
+## Containerization & Orchestration
+- Docker
+- Docker Compose
+
+## API Documentation
+- OpenAPI/Swagger UI
+
+## Microservices
+1. API Gateway (Port 8000)
+   - Routes requests to appropriate services
+   - Provides unified API entry point
+
+2. Assignment Service (Port 8001)
+   - PostgreSQL database
+   - File upload handling
+
+3. Grading Service (Port 8002)
+   - PostgreSQL & MongoDB databases
+   - Cross-service communication
+
+4. Quiz Service (Port 8003)
+   - MongoDB database
+   - Async operations
+
+5. Forum Service (Port 8004)
+   - PostgreSQL database
+   - Markdown support
+
+6. Content Service (Port 8005)
+   - MongoDB database
+   - Rich text content management
+
+## Communication Pattern
+- RESTful APIs
+- JSON data exchange
+- HTTP/HTTPS protocols
