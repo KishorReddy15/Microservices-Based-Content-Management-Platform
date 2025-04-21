@@ -1,0 +1,37 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'integration-layer'
+    static_configs:
+      - targets: ['integration-layer:8080']
+
+  - job_name: 'api-gateway'
+    static_configs:
+      - targets: ['api-gateway:8000']
+
+  - job_name: 'assignment-service'
+    static_configs:
+      - targets: ['assignment-service:8001']
+
+  - job_name: 'grading-service'
+    static_configs:
+      - targets: ['grading-service:8002']
+
+  - job_name: 'quiz-service'
+    static_configs:
+      - targets: ['quiz-service:8003']
+
+  - job_name: 'forum-service'
+    static_configs:
+      - targets: ['forum-service:8004']
+
+  - job_name: 'content-service'
+    static_configs:
+      - targets: ['content-service:8005']
+
+  # External services (uncomment and configure when available)
+  # - job_name: 'external-api-gateway'
+  #   static_configs:
+  #     - targets: ['external-api-gateway:9000']

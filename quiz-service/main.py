@@ -1,13 +1,15 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pymongo import MongoClient
 from datetime import datetime, timezone
 import os
+import requests
 from pydantic import BaseModel, Field, ValidationError, validator
 from typing import List, Optional, Dict, Union, Any
 from bson.objectid import ObjectId
 from bson import errors
 from enum import Enum
+import threading
 
 app = FastAPI()
 
@@ -25,6 +27,25 @@ MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 client = MongoClient(MONGO_URI)
 db = client.content_management
 quiz_collection = db.quizzes
+
+# Calendar service configuration
+CALENDAR_SERVICE_URL = os.getenv("CALENDAR_SERVICE_URL", "http://calendar-service:5000")
+
+# Import and initialize calendar integration
+from calendar_integration.client import CalendarClient
+from calendar_integration.scheduler import QuizScheduler
+
+calendar_client = CalendarClient(CALENDAR_SERVICE_URL)
+quiz_scheduler = QuizScheduler(quiz_collection, calendar_client)
+
+# Start the scheduler in the background
+@app.on_event("startup")
+def startup_event():
+    quiz_scheduler.start_scheduler()
+
+@app.on_event("shutdown")
+def shutdown_event():
+    quiz_scheduler.stop_scheduler()
 
 # Helper function for timezone-aware UTC now
 def utc_now():
@@ -46,6 +67,14 @@ def format_quiz_response(quiz: dict) -> dict:
     response["created_at"] = response.get("created_at", None)
     response["updated_at"] = response.get("updated_at", None)
     response["questions"] = response.get("questions", [])
+    response["start_time"] = response.get("start_time", None)
+    response["end_time"] = response.get("end_time", None)
+
+    # Calendar integration fields
+    response["is_scheduled"] = response.get("is_scheduled", False)
+    response["scheduled_date"] = response.get("scheduled_date", None)
+    response["calendar_event_id"] = response.get("calendar_event_id", None)
+    response["auto_publish"] = response.get("auto_publish", False)
 
     return response
 
@@ -114,6 +143,11 @@ class QuizCreate(BaseModel):
     is_published: bool = False
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
+    # Calendar integration fields
+    is_scheduled: bool = False
+    scheduled_date: Optional[datetime] = None
+    calendar_event_id: Optional[str] = None
+    auto_publish: bool = False  # Automatically publish when scheduled time arrives
 
 class Quiz(BaseModel):
     title: str
@@ -124,6 +158,13 @@ class Quiz(BaseModel):
     is_published: bool = False
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    # Calendar integration fields
+    is_scheduled: bool = False
+    scheduled_date: Optional[datetime] = None
+    calendar_event_id: Optional[str] = None
+    auto_publish: bool = False
 
 class QuizResponse(BaseModel):
     id: str
@@ -135,6 +176,13 @@ class QuizResponse(BaseModel):
     is_published: bool = False
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    # Calendar integration fields
+    is_scheduled: bool = False
+    scheduled_date: Optional[datetime] = None
+    calendar_event_id: Optional[str] = None
+    auto_publish: bool = False
 
 class QuizSubmission(BaseModel):
     quiz_id: str
@@ -311,6 +359,124 @@ async def publish_quiz(quiz_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to publish quiz: {str(e)}")
+
+# Schedule a quiz
+@app.post("/quizzes/{quiz_id}/schedule")
+async def schedule_quiz(quiz_id: str, scheduled_date: datetime, auto_publish: bool = False):
+    try:
+        object_id = validate_object_id(quiz_id)
+
+        # Get the quiz
+        quiz = quiz_collection.find_one({"_id": object_id})
+        if not quiz:
+            raise HTTPException(status_code=404, detail="Quiz not found")
+
+        # Schedule the quiz
+        event = quiz_scheduler.schedule_quiz(
+            quiz_id=object_id,
+            scheduled_date=scheduled_date,
+            title=quiz["title"],
+            description=quiz.get("description", ""),
+            duration_minutes=quiz.get("duration_minutes", 60),
+            auto_publish=auto_publish
+        )
+
+        # Get the updated quiz
+        updated_quiz = quiz_collection.find_one({"_id": object_id})
+
+        return {
+            "status": "success",
+            "message": "Quiz scheduled successfully",
+            "quiz": format_quiz_response(updated_quiz),
+            "calendar_event": event
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to schedule quiz: {str(e)}")
+
+# Update quiz schedule
+@app.put("/quizzes/{quiz_id}/schedule")
+async def update_quiz_schedule(quiz_id: str, scheduled_date: datetime, auto_publish: Optional[bool] = None):
+    try:
+        object_id = validate_object_id(quiz_id)
+
+        # Get the quiz
+        quiz = quiz_collection.find_one({"_id": object_id})
+        if not quiz:
+            raise HTTPException(status_code=404, detail="Quiz not found")
+
+        if not quiz.get("is_scheduled"):
+            raise HTTPException(status_code=400, detail="Quiz is not scheduled")
+
+        # Update the schedule
+        event = quiz_scheduler.update_quiz_schedule(
+            quiz_id=object_id,
+            scheduled_date=scheduled_date,
+            auto_publish=auto_publish
+        )
+
+        # Get the updated quiz
+        updated_quiz = quiz_collection.find_one({"_id": object_id})
+
+        return {
+            "status": "success",
+            "message": "Quiz schedule updated successfully",
+            "quiz": format_quiz_response(updated_quiz),
+            "calendar_event": event
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update quiz schedule: {str(e)}")
+
+# Cancel quiz schedule
+@app.delete("/quizzes/{quiz_id}/schedule")
+async def cancel_quiz_schedule(quiz_id: str):
+    try:
+        object_id = validate_object_id(quiz_id)
+
+        # Get the quiz
+        quiz = quiz_collection.find_one({"_id": object_id})
+        if not quiz:
+            raise HTTPException(status_code=404, detail="Quiz not found")
+
+        if not quiz.get("is_scheduled"):
+            raise HTTPException(status_code=400, detail="Quiz is not scheduled")
+
+        # Cancel the schedule
+        response = quiz_scheduler.cancel_quiz_schedule(quiz_id=object_id)
+
+        # Get the updated quiz
+        updated_quiz = quiz_collection.find_one({"_id": object_id})
+
+        return {
+            "status": "success",
+            "message": "Quiz schedule cancelled successfully",
+            "quiz": format_quiz_response(updated_quiz)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to cancel quiz schedule: {str(e)}")
+
+# Get scheduled quizzes
+@app.get("/quizzes/scheduled")
+async def get_scheduled_quizzes():
+    try:
+        scheduled_quizzes = quiz_scheduler.get_scheduled_quizzes()
+        return scheduled_quizzes
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get scheduled quizzes: {str(e)}")
+
+# Get upcoming scheduled quizzes
+@app.get("/quizzes/scheduled/upcoming")
+async def get_upcoming_scheduled_quizzes():
+    try:
+        upcoming_quizzes = quiz_scheduler.get_upcoming_scheduled_quizzes()
+        return upcoming_quizzes
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get upcoming scheduled quizzes: {str(e)}")
 
 # Submit quiz
 @app.post("/quizzes/{quiz_id}/submit")

@@ -28,6 +28,11 @@ try:
         title = Column(String, nullable=False)
         description = Column(Text, nullable=False)
         created_at = Column(DateTime, default=datetime.utcnow)
+        # New fields for date-specific topics
+        scheduled_date = Column(DateTime, nullable=True)
+        end_date = Column(DateTime, nullable=True)
+        is_scheduled = Column(Integer, default=0)  # 0: not scheduled, 1: scheduled
+        calendar_event_id = Column(String, nullable=True)  # Reference to calendar event
         posts = relationship("PostDB", back_populates="topic", cascade="all, delete-orphan")
 
     class PostDB(Base):
@@ -49,6 +54,10 @@ except Exception as e:
 class TopicBase(BaseModel):
     title: str
     description: str
+    scheduled_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+    is_scheduled: int = 0
+    calendar_event_id: Optional[str] = None
 
 class PostBase(BaseModel):
     content: str
@@ -65,6 +74,10 @@ class PostResponse(PostBase):
 class TopicResponse(TopicBase):
     id: str
     created_at: datetime
+    scheduled_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+    is_scheduled: int = 0
+    calendar_event_id: Optional[str] = None
     posts: List[PostResponse] = []
 
     class Config:
