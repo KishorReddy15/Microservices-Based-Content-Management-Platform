@@ -29,6 +29,8 @@ services:
       - QUIZ_SERVICE_URL=http://quiz-service:8003
       - FORUM_SERVICE_URL=http://forum-service:8004
       - CONTENT_SERVICE_URL=http://content-service:8005
+      - CALENDAR_SERVICE_URL=http://calendar-service:5000
+      - STUDENT_FEEDBACK_URL=http://student-feedback-service:8000
     depends_on:
       assignment-service:
         condition: service_started
@@ -72,6 +74,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/content_management
       - MONGO_URI=mongodb://mongodb:27017/
+      - STUDENT_FEEDBACK_URL=http://student-feedback-service:8000
     depends_on:
       postgres:
         condition: service_healthy
@@ -79,6 +82,8 @@ services:
         condition: service_healthy
       assignment-service:
         condition: service_healthy
+      student-feedback-service:
+        condition: service_started
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8002/health" ]
       interval: 30s
@@ -93,11 +98,31 @@ services:
       - "8003:8003"
     environment:
       - MONGO_URI=mongodb://mongodb:27017/
+      - CALENDAR_SERVICE_URL=http://calendar-service:5000
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      calendar-service:
+        condition: service_started
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8003/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # Calendar Service
+  calendar-service:
+    build: ./calendar-main/server
+    ports:
+      - "5000:5000"
+    environment:
+      - MONGODB_URI=mongodb://mongodb:27017/calendar-app
     depends_on:
       mongodb:
         condition: service_healthy
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8003/health" ]
+      test: [ "CMD", "curl", "-f", "http://localhost:5000/api" ]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -150,6 +175,23 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+
+  # Student Feedback Service
+  student-feedback-service:
+    build: ./student_FEEDBACK
+    ports:
+      - "8006:8000"
+    environment:
+      - MONGODB_URL=mongodb://mongodb:27017/
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
 
 volumes:
   postgres_data:

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, ForeignKey, JSON, Text, Boolean
 from sqlalchemy.ext.declarative import declarative_base
@@ -6,10 +6,14 @@ from sqlalchemy.orm import sessionmaker, relationship, Session
 from datetime import datetime
 import os
 from pydantic import BaseModel
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 from pymongo import MongoClient
 import json
 import time
+import requests
+
+# Import the feedback client
+from feedback_integration.client import FeedbackClient
 
 app = FastAPI()
 
@@ -32,6 +36,10 @@ Base = declarative_base()
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://mongodb:27017/")
 mongo_client = MongoClient(MONGO_URI)
 mongo_db = mongo_client.grading
+
+# Student Feedback configuration
+STUDENT_FEEDBACK_URL = os.getenv("STUDENT_FEEDBACK_URL", "http://student-feedback-service:8000")
+feedback_client = FeedbackClient(STUDENT_FEEDBACK_URL)
 
 # Database models
 class Assignment(Base):
@@ -254,3 +262,110 @@ async def get_assignment_statistics(assignment_id: str, db: Session = Depends(ge
     }
 
     return statistics
+
+# Student Feedback Integration Endpoints
+
+@app.get("/grades/{assignment_id}/student/{student_id}/with-feedback")
+async def get_grade_with_feedback(assignment_id: str, student_id: int, db: Session = Depends(get_db)):
+    """Get a grade with student performance feedback"""
+    # Get the grade from the database
+    grade = db.query(Grade).filter(
+        Grade.assignment_id == assignment_id,
+        Grade.student_id == student_id
+    ).first()
+
+    if grade is None:
+        raise HTTPException(status_code=404, detail="Grade not found")
+
+    # Get detailed feedback from MongoDB
+    mongo_feedback = mongo_db.feedback.find_one({
+        "assignment_id": assignment_id,
+        "student_id": student_id
+    })
+
+    # Get student performance feedback from the student feedback service
+    try:
+        performance_feedbacks = feedback_client.get_student_feedbacks(student_id)
+    except Exception as e:
+        performance_feedbacks = []
+        print(f"Error getting student performance feedback: {str(e)}")
+
+    # Filter feedbacks related to this assignment if assignment_id is present
+    assignment_feedbacks = []
+    for feedback in performance_feedbacks:
+        if feedback.get("assignment_id") == assignment_id:
+            assignment_feedbacks.append(feedback)
+
+    # Prepare the response
+    response = {
+        "grade": GradeResponse.from_orm(grade).dict(),
+        "detailed_feedback": mongo_feedback if mongo_feedback else None,
+        "performance_feedbacks": assignment_feedbacks if assignment_feedbacks else performance_feedbacks
+    }
+
+    # Remove MongoDB's _id field if present
+    if response["detailed_feedback"] and "_id" in response["detailed_feedback"]:
+        del response["detailed_feedback"]["_id"]
+
+    return response
+
+@app.post("/grades/{assignment_id}/student/{student_id}/performance-feedback")
+async def create_performance_feedback(
+    assignment_id: str,
+    student_id: int,
+    feedback_data: dict,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    """Create performance feedback for a student's assignment"""
+    # Check if the grade exists
+    grade = db.query(Grade).filter(
+        Grade.assignment_id == assignment_id,
+        Grade.student_id == student_id
+    ).first()
+
+    if grade is None:
+        raise HTTPException(status_code=404, detail="Grade not found")
+
+    # Extract feedback data
+    mentor_id = feedback_data.get("mentor_id")
+    if not mentor_id:
+        raise HTTPException(status_code=400, detail="mentor_id is required")
+
+    feedback_text = feedback_data.get("feedback_text", "")
+    performance_areas = feedback_data.get("performance_areas", [])
+    improvement_suggestions = feedback_data.get("improvement_suggestions", [])
+    strengths = feedback_data.get("strengths", [])
+
+    # Create the feedback in the background to avoid blocking the response
+    def create_feedback_task():
+        try:
+            feedback = feedback_client.create_feedback(
+                student_id=student_id,
+                mentor_id=mentor_id,
+                assignment_id=assignment_id,
+                grade_id=str(grade.id),
+                feedback_text=feedback_text,
+                performance_areas=performance_areas,
+                improvement_suggestions=improvement_suggestions,
+                strengths=strengths
+            )
+            print(f"Created performance feedback: {feedback}")
+            return feedback
+        except Exception as e:
+            print(f"Error creating performance feedback: {str(e)}")
+            return None
+
+    # Add the task to the background tasks
+    background_tasks.add_task(create_feedback_task)
+
+    return {"status": "success", "message": "Performance feedback creation initiated"}
+
+@app.get("/students/{student_id}/performance-feedbacks")
+async def get_student_performance_feedbacks(student_id: int):
+    """Get all performance feedbacks for a student"""
+    try:
+        feedbacks = feedback_client.get_student_feedbacks(student_id)
+        return feedbacks
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting student performance feedbacks: {str(e)}")
